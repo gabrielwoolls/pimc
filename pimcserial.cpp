@@ -6,34 +6,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
-#include "mtrand.h"
-#include <ctime>
 #include <random>
 #include <iomanip>
 
 using namespace std;
-double getRandom();
-unsigned int good_seed();
-//MTRand53 mt(good_seed());
-int rand();
 
+
+// these are used to generate random numbers later.
 std::random_device rd;
 std::mt19937 e2(rd());
 std::uniform_real_distribution<> dist(0., 1.);
 std::default_random_engine generator;
 
-int n = 2; // num of particles
-int M = 10; // num total timesteps
+int n = 5; // num of particles
+int M = 40; // num total timesteps
 int dim = 2; // num spatial dimensions
 
-double b = 1.0; // inverse temperature (name 'beta' gives a warning)
+double b = 3.0; // inverse temperature (name 'beta' gives a warning)
 double dt = b/M; // imaginary timestep (related to beta)
 
-double lambd = 6.0596; // constant relating to He
+double lambd = 6.0596; // hbar^2 / 2*m_He
 
 double L = 10.0; // box size is -L to L in dim dimensions
 
-int n_updates = 15; // number of attempts at updating worldlines per step
+int n_updates = 20000; // number of attempts at updating worldlines per step
 int acceptances = 0; // tracker of how many updates get accepted
 
 
@@ -42,7 +38,6 @@ int acceptances = 0; // tracker of how many updates get accepted
 //double U(std::vector<std::vector<std::vector<double>>>, std::vector<std::vector<double>>, int, int, int);
 //void beadbybead_T(std::vector<std::vector<std::vector<double>>>, std::vector<std::vector<double>>, int, int);
 //void beadbybead_A(std::vector<std::vector<std::vector<double>>>, std::vector<std::vector<double>>, int, int);
-
 double V_ext(double**, int);
 double U(double***, double**, int, int, int);
 void beadbybead_T(double***, double**, int, int);
@@ -66,14 +61,14 @@ int main(int argc, char* argv []) {
         }
     }
 
-    // // temporary vec of vec of vecs, easier to debug
+    // // temporary vec of vec of vecs, easier to debug than pointers
     // std::vector<std::vector<std::vector<double>>> Q(n,std::vector<std::vector<double>>(M,std::vector<double>(dim)));
 
     // initialize particle positions somewhere in the box
     double rand_q;
     for(int i = 0; i < n; ++i) {
         for(int k = 0; k < dim; ++k) {
-            rand_q = L*((rand() % 100)/50. - 1.); //pseudorand. number btwn -L and L
+            rand_q = L*(2.*dist(e2) - 1.); //pseudorand. number btwn -L and L
             for(int j = 0; j < M; ++j) {
                 Q[i][j][k] = rand_q;
             }
@@ -101,44 +96,66 @@ int main(int argc, char* argv []) {
             }
             int t_upd = floor(dist(e2) * M);
             
-            beadbybead_T(Q, Q_test, i, t_upd); // updates Q_test
+            // T (bead-by-bead algorithm, as opposed to bisection) makes a worldline Q_test for particle i with one random bead displaced
+            beadbybead_T(Q, Q_test, i, t_upd); 
 
-            if (i == 0) {
+            // print statements to test how T updates particles:
+            // if (i == 0 && updates > n_updates-20) {
             
-                for (int j = 0; j < M; j++) {
-                    std::cout << Q[i][j][0] << "  " << std::flush;
-                }
+            //     for (int j = 0; j < M; j++) {
+            //         std::cout << Q[i][j][0] << "  " << std::flush;
+            //     }
                 
-                std::cout << " | " << std::endl;
+            //     std::cout << " | " << std::endl;
 
-                for (int j = 0; j < M; j++) {
-                    std::cout << Q_test[j][0] << "  " << std::flush;
-                }
+            //     for (int j = 0; j < M; j++) {
+            //         std::cout << Q_test[j][0] << "  " << std::flush;
+            //     }
 
-                std::cout << " | " << std::endl;
-            }
+            //     std::cout << " | " << std::endl;
+            // }
 
-            beadbybead_A(Q, Q_test, i, t_upd);
+            // A uses the Metropolis acceptance test to decide whether or not to accept the new worldline Q_test  
+            beadbybead_A(Q, Q_test, i, t_upd); 
 
         }
     }
 
-    std::cout << std::endl;
-    std::cout << acceptances << " out of 100";
+    std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
 
+
+    // write an output file
+    ofstream outFile("worldlines.txt");
+
+    // print array to file
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < M; j++) {
+            for (int k = 0; k < dim; k++) {
+                outFile << Q[i][j][k] << " ";
+            }
+            outFile << endl;
+        }
+        outFile << endl;
+    }
+
+    // close output file
+    outFile.close();
 
     return 0;
 }
+
+
 
 // simple harmonic potential. modify for other dimensions + for pointers
 // pass it some Q[i] (one particle's worldline)
 double V_ext(double** Q, int t) {
     double totV = 0.;
     for (int k = 0; k < dim; k++) {
-        totV += 0.1*pow(Q[t][k],2);
+        totV += 0.2*pow(Q[t][k],2);
     }
     return totV;
 }
+
 
 
 // lennard jones potential for two particles
@@ -150,8 +167,9 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
         r2 += pow(Q[i][t][k]-Q_test[t][k],2);
     }
     double r6 = pow(avg_sep / r2, 3);
-    return 2*(r6*r6 - r6);
+    return 4*(r6*r6 - r6);
 }
+
 
 
 // move a particle i at bead (time step) t according to gaussian dist, then write new pos.to Q_test
@@ -159,33 +177,35 @@ void beadbybead_T(double*** Q, double** Q_test, int i, int t) {
     double* r_mean = new double[dim];
 
     for (int k = 0; k < dim; k++) {
-        // avg of bead before and after bead i (with PBC)
+        // avg position of bead i+1 and bead i-1 ( modulos etc so we have PBC)
         r_mean[k] = 0.5*(Q[i][(M+t-1)%M][k]+Q[i][(t+1)%M][k]);
 
-        // must have stdev lambda*dt and mean r_mean[k]
+        // use a gaussian to update positions; it must have stdev lambda*dt and mean r_mean[k]
         std::normal_distribution<double> distrib(r_mean[k],dt*lambd);
         Q_test[t][k] = distrib(generator);
     }
 }
 
 
+
 // adjusts Q for a particle i and bead (time step) t
 void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
     double V_tot = 0;
     // calculate total difference in energy between configuration in Q and that if we used Q_test
+    // aka V_tot = (energy of Q_test worldline) - (energy of current Q worldline)
 
     // single particle contribution
     V_tot += V_ext(Q_test, t) - V_ext(Q[i], t);
 
-    // two particle contribution
+    // sum to get two particle contribution
     for (int l = 0; l < n; l++) {
         if (l != i) {
             V_tot += U(Q, Q_test, l, i, t) - U(Q, Q[i], l, i, t);
         }
     }
 
-    if(i==0){std::cout << V_tot << std::endl;}
-    // instead of doing the min thing, just check if this is positive
+    //if(i==0){std::cout << V_tot << std::endl;}
+    // instead of doing prob = min{1,e^(tau v' - v)}, just check if V_tot is positive
     // TODO: can speed this up a lot if we only update the correct dt rather than all M of them
     if (V_tot < 0) {
         for (int t = 0; t < M; t++) {
