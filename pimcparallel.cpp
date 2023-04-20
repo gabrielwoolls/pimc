@@ -8,14 +8,18 @@
 #include <vector>
 #include <random>
 #include <iomanip>
+#include <chrono>
 #include <omp.h>
+
+#define OMP_NUM_THREADS 2
 
 using namespace std;
 
 
 // these are used to generate random numbers later.
+int seed = 8;
 std::random_device rd;
-std::mt19937 e2(rd());
+std::mt19937 e2( seed ? seed : rd());
 std::uniform_real_distribution<> dist(0., 1.);
 std::default_random_engine generator;
 
@@ -37,7 +41,7 @@ int acceptances = 0; // tracker of how many updates get accepted
 //functions
 double V_ext(double**, int);
 double U(double***, double**, int, int, int);
-void beadbybead_T(double***, double**, int, int);
+void beadbybead_T(double**, int, int);
 void beadbybead_A(double***, double**, int, int);
 
 
@@ -46,85 +50,105 @@ int main(int argc, char* argv []) {
     std::cout << std::fixed;
     std::cout << std::setprecision(2);
 
-    omp_set_num_threads(2);
-    
+    auto start_time = std::chrono::steady_clock::now();
+
+    omp_set_num_threads(OMP_NUM_THREADS);
     // make array of all particle worldlines:
     // Q_ijk = (particle id i, time step j, dimension k)
     // put this back in eventually but vectors are easier to debug
     double*** Q = new double**[n];
 
-    for(int i = 0; i < n; ++i){
-        Q[i] = new double*[M];
-        for(int j = 0; j < M; ++j){
-            Q[i][j] = new double[dim];
+    #pragma omp parallel for
+        for(int i = 0; i < n; ++i){
+            Q[i] = new double*[M];
+            for(int j = 0; j < M; ++j){
+                Q[i][j] = new double[dim];
+            }
         }
-    }
 
     // // temporary vec of vec of vecs, easier to debug than pointers
     // std::vector<std::vector<std::vector<double>>> Q(n,std::vector<std::vector<double>>(M,std::vector<double>(dim)));
 
     // initialize particle positions somewhere in the box
     double rand_q;
-    for(int i = 0; i < n; ++i) {
-        for(int k = 0; k < dim; ++k) {
-            rand_q = L*(2.*dist(e2) - 1.); //pseudorand. number btwn -L and L
-            for(int j = 0; j < M; ++j) {
-                Q[i][j][k] = rand_q;
+    #pragma omp parallel for
+        for(int i = 0; i < n; ++i) {
+            for(int k = 0; k < dim; ++k) {
+                rand_q = L*(2.*dist(e2) - 1.); //pseudorand. number btwn -L and L
+                for(int j = 0; j < M; ++j) {
+                    Q[i][j][k] = rand_q;
+                }
             }
         }
-    }
 
     // try to update particle worldlines
 
-    // Q_test will hold one particle's new trial worldline:
-    //std::vector<std::vector<double>> Q_test(M,std::vector<double>(dim));
-    double** Q_test = new double*[M];
-    for(int i = 0; i < M; ++i){
-        Q_test[i] = new double[dim];
-    }
+   
 
+    #pragma omp parallel
+    {
+        int my_id, num_threads;
+        my_id = omp_get_thread_num();
+        num_threads = omp_get_num_threads();
+        
 
-    for(int updates = 0; updates < n_updates; updates++) {
-    // try once to update a random bead on each worldline
-        for(int i = 0; i < n; i++) {
-            // fill in Q_test for all time slices
-            for(int t = 0; t < M; t++) {
-                for(int k = 0; k < dim; k++) {
-                    Q_test[t][k] = Q[i][t][k];
-                }
-            }
-            int t_upd = floor(dist(e2) * M);
-            
-            // T (bead-by-bead algorithm, as opposed to bisection) makes a worldline Q_test for particle i with one random bead displaced
-            beadbybead_T(Q, Q_test, i, t_upd); 
-
-            // print statements to test how T updates particles:
-            // if (i == 0 && updates > n_updates-20) {
-            
-            //     for (int j = 0; j < M; j++) {
-            //         std::cout << Q[i][j][0] << "  " << std::flush;
-            //     }
-                
-            //     std::cout << " | " << std::endl;
-
-            //     for (int j = 0; j < M; j++) {
-            //         std::cout << Q_test[j][0] << "  " << std::flush;
-            //     }
-
-            //     std::cout << " | " << std::endl;
-            // }
-
-            // A uses the Metropolis acceptance test to decide whether or not to accept the new worldline Q_test  
-            beadbybead_A(Q, Q_test, i, t_upd); 
-
+        // Q_test will hold one particle's new trial worldline:
+        //std::vector<std::vector<double>> Q_test(M,std::vector<double>(dim));
+        // Each OpenMP thread needs its own Q test, which is why it's after the pragma
+        double** Q_test = new double*[M];
+        for(int i = 0; i < M; ++i){
+            Q_test[i] = new double[dim];
         }
+        int t_upd;
+
+        // Each OMP thread goes through its assigned particles and updates them
+        // For now, split the particles evenly among threads. No reason to assume
+        // things won't be load-balanced since these are independent particles
+        int my_start, my_end;
+        my_start = my_id * n / num_threads;
+        my_end = (my_id + 1) * n / num_threads;
+        if (my_id == num_threads - 1) {my_end = n;}
+
+        // Each particle is updated n_updates times
+        for(int updates = 0; updates < n_updates; updates++) {
+
+            // Each thread goes through the particles it owns
+            for( int loc_particle = my_start; loc_particle < my_end; loc_particle++) {
+
+                //std::cout << "Thread " << my_id << " working on particle " << loc_particle << std::endl;
+
+                // fill in Q_test for all time slices
+                for(int t = 0; t < M; t++) {
+                    for(int k = 0; k < dim; k++) {
+                        Q_test[t][k] = Q[loc_particle][t][k];
+                    }
+                }
+
+                t_upd = floor(dist(e2) * M);
+                beadbybead_T(Q_test, loc_particle, t_upd); 
+
+                // A uses the Metropolis acceptance test to decide whether or not to accept the new worldline Q_test  
+                beadbybead_A(Q, Q_test, loc_particle, t_upd); 
+            }
+
+                #pragma omp barrier
+            }
     }
+
 
     std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
 
+    auto end_time = std::chrono::steady_clock::now();
+
+    std::chrono::duration<double> diff = end_time - start_time;
+    double seconds = diff.count();
+
+    // Finalize
+    std::cout << "Simulation Time = " << seconds << " seconds for " << n << " particles.\n";
+
 
     // write an output file
-    ofstream outFile("worldlines.txt");
+    ofstream outFile("worldlines_parallel.txt");
 
     // print array to file
     for (int i = 0; i < n; i++) {
@@ -172,12 +196,12 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
 
 
 // move a particle i at bead (time step) t according to gaussian dist, then write new pos.to Q_test
-void beadbybead_T(double*** Q, double** Q_test, int i, int t) {
+void beadbybead_T(double** Q_test, int i, int t) {
     double* r_mean = new double[dim];
 
     for (int k = 0; k < dim; k++) {
         // avg position of bead i+1 and bead i-1 ( modulos etc so we have PBC)
-        r_mean[k] = 0.5*(Q[i][(M+t-1)%M][k]+Q[i][(t+1)%M][k]);
+        r_mean[k] = 0.5*(Q_test[(M+t-1)%M][k]+Q_test[(t+1)%M][k]);
 
         // use a gaussian to update positions; it must have stdev lambda*dt and mean r_mean[k]
         std::normal_distribution<double> distrib(r_mean[k],dt*lambd);

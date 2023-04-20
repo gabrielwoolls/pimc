@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <vector>
 #include <random>
+#include <chrono>
 #include <iomanip>
 
 using namespace std;
@@ -41,7 +42,7 @@ int acceptances = 0; // tracker of how many updates get accepted
 //void beadbybead_A(std::vector<std::vector<std::vector<double>>>, std::vector<std::vector<double>>, int, int);
 double V_ext(double**, int);
 double U(double***, double**, int, int, int);
-void beadbybead_T(double***, double**, int, int);
+void beadbybead_T(double**, int, int);
 void beadbybead_A(double***, double**, int, int);
 
 
@@ -49,6 +50,8 @@ int main(int argc, char* argv []) {
     std::srand(time(NULL));
     std::cout << std::fixed;
     std::cout << std::setprecision(2);
+
+    auto start_time = std::chrono::steady_clock::now();
     
     // make array of all particle worldlines:
     // Q_ijk = (particle id i, time step j, dimension k)
@@ -98,7 +101,7 @@ int main(int argc, char* argv []) {
             int t_upd = floor(dist(e2) * M);
             
             // T (bead-by-bead algorithm, as opposed to bisection) makes a worldline Q_test for particle i with one random bead displaced
-            beadbybead_T(Q, Q_test, i, t_upd); 
+            beadbybead_T(Q_test, i, t_upd); 
 
             // print statements to test how T updates particles:
             // if (i == 0 && updates > n_updates-20) {
@@ -124,9 +127,17 @@ int main(int argc, char* argv []) {
 
     std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
 
+    auto end_time = std::chrono::steady_clock::now();
+
+    std::chrono::duration<double> diff = end_time - start_time;
+    double seconds = diff.count();
+
+    // Finalize
+    std::cout << "Simulation Time = " << seconds << " seconds for " << n << " particles.\n";
+
 
     // write an output file
-    ofstream outFile("worldlines.txt");
+    ofstream outFile("worldlines_serial.txt");
 
     // print array to file
     for (int i = 0; i < n; i++) {
@@ -174,12 +185,12 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
 
 
 // move a particle i at bead (time step) t according to gaussian dist, then write new pos.to Q_test
-void beadbybead_T(double*** Q, double** Q_test, int i, int t) {
+void beadbybead_T( double** Q_test, int i, int t) {
     double* r_mean = new double[dim];
 
     for (int k = 0; k < dim; k++) {
         // avg position of bead i+1 and bead i-1 ( modulos etc so we have PBC)
-        r_mean[k] = 0.5*(Q[i][(M+t-1)%M][k]+Q[i][(t+1)%M][k]);
+        r_mean[k] = 0.5*(Q_test[(M+t-1)%M][k]+Q_test[(t+1)%M][k]);
 
         // use a gaussian to update positions; it must have stdev lambda*dt and mean r_mean[k]
         std::normal_distribution<double> distrib(r_mean[k],dt*lambd);
