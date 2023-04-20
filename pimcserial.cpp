@@ -13,8 +13,9 @@ using namespace std;
 
 
 // these are used to generate random numbers later.
+int seed = 8;
 std::random_device rd;
-std::mt19937 e2(rd());
+std::mt19937 e2( seed ? seed : rd());
 std::uniform_real_distribution<> dist(0., 1.);
 std::default_random_engine generator;
 
