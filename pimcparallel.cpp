@@ -299,7 +299,7 @@ for (int i=0; i<n; i++){
 // potential /= M;
 // return -(kinetic + potential);
 
-u = -potential/M - kinetic*M/(4*lambd*pow(b,2));
+u = 0.5*dim*n*M/b -potential/M - kinetic*M/(4*lambd*pow(b,2));
 cv = -kinetic * M/(2*lambd*b);
 return {u, cv};
 }
@@ -315,7 +315,7 @@ double get_heat_cap(double* u_array, double cv_kinetic, double beta){
         avg_u += u_array[i];
         avg_u2 += u_array[i]*u_array[i];
     }
-    
+
     avg_u /= size;
     avg_u2 /= size;
 
