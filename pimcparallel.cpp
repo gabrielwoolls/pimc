@@ -304,6 +304,27 @@ cv = -kinetic * M/(2*lambd*b);
 return {u, cv};
 }
 
+// compute the heat capacity Cv from the 'kinetic' contribution + energy variance
+// u_array should be a list of thermal energies computed from different initial conditions at the same beta
+double get_heat_cap(double* u_array, double cv_kinetic, double beta){
+
+    int size = sizeof(u_array) / sizeof(u_array[0]);
+
+    double avg_u, avg_u2 = 0;
+    for (int i=0; i<size; i++){
+        avg_u += u_array[i];
+        avg_u2 += u_array[i]*u_array[i];
+    }
+    
+    avg_u /= size;
+    avg_u2 /= size;
+
+    double Cv = (beta*beta)*(avg_u2-pow(avg_u,2));
+    Cv += cv_kinetic + 0.5*dim*n*M;
+
+    return Cv;
+}
+
 // double heat_cap_kinetic_sample(double*** Q_ijk){
 // Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
 // and computes the kinetic contribution to the heat capacity Cv
