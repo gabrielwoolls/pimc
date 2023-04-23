@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <chrono>
 #include <omp.h>
+#include <utility> // for std::pair used in `thermo_sample`
 
 #define OMP_NUM_THREADS 2
 
@@ -84,7 +85,6 @@ int main(int argc, char* argv []) {
 
     // try to update particle worldlines
 
-   
 
     #pragma omp parallel
     {
@@ -95,7 +95,7 @@ int main(int argc, char* argv []) {
 
         // Q_test will hold one particle's new trial worldline:
         //std::vector<std::vector<double>> Q_test(M,std::vector<double>(dim));
-        // Each OpenMP thread needs its own Q test, which is why it's after the pragma
+        // Each OpenMP thread needs its own `Q_test`, hence why it's after the `#pragma`
         double** Q_test = new double*[M];
         for(int i = 0; i < M; ++i){
             Q_test[i] = new double[dim];
@@ -197,14 +197,14 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
 
 // interparticle potential U for all particle pairs at time t
 double U_all_particles(double*** Q_ijk, int t){
-double potential=0;
-for (int a=0; a<n; a++){
-    for (int b=a; b<n; b++){
-        // add potential between particles (a,b)
-        potential += U(Q_ijk, Q_ijk[a], b, -1, t);
+    double potential=0;
+    for (int a=0; a<n; a++){
+        for (int b=a+1; b<n; b++){
+            // add potential between particles (a,b)
+            potential += U(Q_ijk, Q_ijk[a], b, -1, t);
+        }
     }
-}
-return potential;
+    return potential;
 }
 
 
@@ -269,12 +269,14 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
 }
 
 
-double thermodyn_sample(double*** Q_ijk){
+double thermo_sample(double*** Q_ijk){
 // Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
 // and computes its contribution to the thermal energy U
 
 double kinetic = 0;
 double potential = 0;
+
+double u, cv = 0;
 
 for (int i=0; i<n; i++){
     for (int k=0; k<dim; k++){
@@ -293,33 +295,33 @@ for (int i=0; i<n; i++){
     }
 }
 
-kinetic *= M/(4*lambd*pow(b,2));
-potential /= M;
+// kinetic *= M/(4*lambd*pow(b,2));
+// potential /= M;
+// return -(kinetic + potential);
 
-return -(kinetic + potential);
+u = -potential/M - kinetic*M/(4*lambd*pow(b,2));
+cv = -kinetic * M/(2*lambd*b);
+return {u, cv};
 }
 
-double heat_cap_kinetic_sample(double*** Q_ijk){
+// double heat_cap_kinetic_sample(double*** Q_ijk){
 // Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
 // and computes the kinetic contribution to the heat capacity Cv
 
-double cv = 0;
-for (int i=0; i<n; i++){
-    for (int k=0; k<dim; k++){
-        for (int j=0; j<M-1; j++){
-            // kinetic term (R_{mu+1}-R_mu)^2
-            cv += pow((Q_ijk[i][j+1][k]-Q_ijk[i][j][k]),2);            
-        }
-        // plus the periodic-boundary kinetic term connecting times 0 and M
-        cv += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
-    }
-}
+// double cv = 0;
+// for (int i=0; i<n; i++){
+//     for (int k=0; k<dim; k++){
+//         for (int j=0; j<M-1; j++){
+//             // kinetic term (R_{mu+1}-R_mu)^2
+//             cv += pow((Q_ijk[i][j+1][k]-Q_ijk[i][j][k]),2);            
+//         }
+//         // plus the periodic-boundary kinetic term connecting times 0 and M
+//         cv += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
+//     }
+// }
 
-cv *= -M/(2*lambd*b);
-return cv;
-
-
-
-}
+// cv *= -M/(2*lambd*b);
+// return cv;
+// }
 
 
