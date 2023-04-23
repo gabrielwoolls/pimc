@@ -43,6 +43,7 @@ double V_ext(double**, int);
 double U(double***, double**, int, int, int);
 void beadbybead_T(double**, int, int);
 void beadbybead_A(double***, double**, int, int);
+double U_all_particles(double ***, int);
 
 
 int main(int argc, char* argv []) {
@@ -194,6 +195,20 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
 }
 
 
+// interparticle potential U for all particle pairs at time t
+double U_all_particles(double*** Q_ijk, int t){
+double potential=0;
+for (int a=0; a<n; a++){
+    for (int b=a; b<n; b++){
+        // add potential between particles (a,b)
+        potential += U(Q_ijk, Q_ijk[a], b, -1, t);
+    }
+}
+return potential;
+}
+
+
+
 
 // move a particle i at bead (time step) t according to gaussian dist, then write new pos.to Q_test
 void beadbybead_T(double** Q_test, int i, int t) {
@@ -252,4 +267,59 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
         }
     }
 }
+
+
+double thermodyn_sample(double*** Q_ijk){
+// Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
+// and computes its contribution to the thermal energy U
+
+double kinetic = 0;
+double potential = 0;
+
+for (int i=0; i<n; i++){
+    for (int k=0; k<dim; k++){
+        for (int j=0; j<M-1; j++){
+            // kinetic term (R_{mu+1}-R_mu)^2
+            kinetic += pow((Q_ijk[i][j+1][k]-Q_ijk[i][j][k]),2);
+            
+            // external harmonic potential
+            potential += V_ext(Q_ijk[i], j);
+
+            // interparticle LJ potential
+            potential += U_all_particles(Q_ijk, j);
+        }
+        // plus the periodic-boundary kinetic term connecting times 0 and M
+        kinetic += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
+    }
+}
+
+kinetic *= M/(4*lambd*pow(b,2));
+potential /= M;
+
+return -(kinetic + potential);
+}
+
+double heat_cap_kinetic_sample(double*** Q_ijk){
+// Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
+// and computes the kinetic contribution to the heat capacity Cv
+
+double cv = 0;
+for (int i=0; i<n; i++){
+    for (int k=0; k<dim; k++){
+        for (int j=0; j<M-1; j++){
+            // kinetic term (R_{mu+1}-R_mu)^2
+            cv += pow((Q_ijk[i][j+1][k]-Q_ijk[i][j][k]),2);            
+        }
+        // plus the periodic-boundary kinetic term connecting times 0 and M
+        cv += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
+    }
+}
+
+cv *= -M/(2*lambd*b);
+return cv;
+
+
+
+}
+
 
