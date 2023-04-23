@@ -145,7 +145,9 @@ int main(int argc, char* argv []) {
 
             }
     }
-
+    
+    // the energy & kinetic Cv computed from *this* Markov Chain initial condition
+    double energy_mc, cv_kin_mc = thermo_sample(Q);
 
     std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
 
