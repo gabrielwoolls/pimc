@@ -9,9 +9,11 @@
 #include <random>
 #include <iomanip>
 #include <chrono>
-#include <omp.h>
 
-#define OMP_NUM_THREADS 2
+#include <omp.h>
+#include <mpi.h>
+
+#define OMP_NUM_THREADS 12
 
 using namespace std;
 
@@ -23,7 +25,7 @@ std::mt19937 e2( seed ? seed : rd());
 std::uniform_real_distribution<> dist(0., 1.);
 std::default_random_engine generator;
 
-int n = 5; // num of particles
+int n = 500; // num of particles
 int M = 40; // num total timesteps
 int dim = 2; // num spatial dimensions
 
@@ -36,6 +38,9 @@ double L = 10.0; // box size is -L to L in dim dimensions
 
 int n_updates = 20000; // number of attempts at updating worldlines per step
 int acceptances = 0; // tracker of how many updates get accepted
+
+// OMP params
+int barrier_wait = 1; // How many updates to do independently before manual barrier
 
 
 //functions
@@ -50,9 +55,11 @@ int main(int argc, char* argv []) {
     std::cout << std::fixed;
     std::cout << std::setprecision(2);
 
+    // Set up OMP and MPI
+    omp_set_num_threads(OMP_NUM_THREADS);
+
     auto start_time = std::chrono::steady_clock::now();
 
-    omp_set_num_threads(OMP_NUM_THREADS);
     // make array of all particle worldlines:
     // Q_ijk = (particle id i, time step j, dimension k)
     // put this back in eventually but vectors are easier to debug
@@ -83,14 +90,13 @@ int main(int argc, char* argv []) {
 
     // try to update particle worldlines
 
-   
 
     #pragma omp parallel
     {
         int my_id, num_threads;
         my_id = omp_get_thread_num();
         num_threads = omp_get_num_threads();
-        
+
 
         // Q_test will hold one particle's new trial worldline:
         //std::vector<std::vector<double>> Q_test(M,std::vector<double>(dim));
@@ -131,7 +137,10 @@ int main(int argc, char* argv []) {
                 beadbybead_A(Q, Q_test, loc_particle, t_upd); 
             }
 
-                #pragma omp barrier
+                if (updates % barrier_wait == 0) {
+                    #pragma omp barrier
+                    }
+
             }
     }
 
@@ -163,6 +172,7 @@ int main(int argc, char* argv []) {
 
     // close output file
     outFile.close();
+
 
     return 0;
 }
@@ -229,13 +239,10 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
 
     //if(i==0){std::cout << V_tot << std::endl;}
     // instead of doing prob = min{1,e^(tau v' - v)}, just check if V_tot is positive
-    // TODO: can speed this up a lot if we only update the correct dt rather than all M of them
     if (V_tot < 0) {
-        for (int t = 0; t < M; t++) {
-            for (int k = 0; k < dim; k++) {
+        for (int k = 0; k < dim; k++) {
             Q[i][t][k] = Q_test[t][k];
             }
-        }
         acceptances += 1;
     }
     else {
@@ -243,11 +250,10 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
 
         // accept move only if a random number is lower than acceptance prob
         if (dist(e2) < prob) {
-            for (int t = 0; t < M; t++) {
-                for (int k = 0; k < dim; k++) {
+            for (int k = 0; k < dim; k++) {
                     Q[i][t][k] = Q_test[t][k];
                 }
-            }
+
             acceptances += 1;
         }
     }
