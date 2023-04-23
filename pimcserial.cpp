@@ -9,6 +9,7 @@
 #include <random>
 #include <chrono>
 #include <iomanip>
+#include <tuple>
 
 using namespace std;
 
@@ -44,6 +45,8 @@ double V_ext(double**, int);
 double U(double***, double**, int, int, int);
 void beadbybead_T(double**, int, int);
 void beadbybead_A(double***, double**, int, int);
+double U_all_particles(double ***, int);
+std::tuple<double, double> thermo_sample(double***);
 
 
 int main(int argc, char* argv []) {
@@ -125,6 +128,11 @@ int main(int argc, char* argv []) {
         }
     }
 
+    // the energy & kinetic Cv computed from *this* Markov Chain initial condition
+    double energy_mc, cv_kin_mc;
+    tie(energy_mc, cv_kin_mc) = thermo_sample(Q);
+
+
     std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
 
     auto end_time = std::chrono::steady_clock::now();
@@ -134,7 +142,7 @@ int main(int argc, char* argv []) {
 
     // Finalize
     std::cout << "Simulation Time = " << seconds << " seconds for " << n << " particles.\n";
-
+    std::cout << "energy = " << energy_mc << ", cv_kin = " << cv_kin_mc << "\n";
 
     // write an output file
     ofstream outFile("worldlines_serial.txt");
@@ -182,6 +190,17 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
     return 4*(r6*r6 - r6);
 }
 
+// interparticle potential U for all particle pairs at time t
+double U_all_particles(double*** Q_ijk, int t){
+    double potential=0;
+    for (int a=0; a<n; a++){
+        for (int b=a+1; b<n; b++){
+            // add potential between particles (a,b)
+            potential += U(Q_ijk, Q_ijk[a], b, -1, t);
+        }
+    }
+    return potential;
+}
 
 
 // move a particle i at bead (time step) t according to gaussian dist, then write new pos.to Q_test
@@ -242,3 +261,55 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
     }
 }
 
+
+std::tuple<double, double> thermo_sample(double*** Q_ijk){
+// Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
+// and computes its contribution to the thermal energy U
+
+double kinetic = 0;
+double potential = 0;
+
+double u, cv = 0;
+
+for (int i=0; i<n; i++){
+    for (int k=0; k<dim; k++){
+        for (int j=0; j<M-1; j++){
+            // kinetic term (R_{mu+1}-R_mu)^2
+            kinetic += pow((Q_ijk[i][j+1][k]-Q_ijk[i][j][k]),2);
+            
+            // external harmonic potential
+            potential += V_ext(Q_ijk[i], j);
+
+            // interparticle LJ potential
+            potential += U_all_particles(Q_ijk, j);
+        }
+        // plus the periodic-boundary kinetic term connecting times 0 and M
+        kinetic += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
+    }
+}
+
+u = 0.5*dim*n*M/b -potential/M - kinetic*M/(4*lambd*pow(b,2));
+cv = -kinetic * M/(2*lambd*b);
+return std::make_tuple(u, cv);
+}
+
+// compute the heat capacity Cv from the 'kinetic' contribution + energy variance
+// u_array should be a list of thermal energies computed from different initial conditions at the same beta
+double get_heat_cap(double* u_array, double cv_kinetic, double beta){
+
+    int size = sizeof(u_array) / sizeof(u_array[0]);
+
+    double avg_u, avg_u2 = 0;
+    for (int i=0; i<size; i++){
+        avg_u += u_array[i];
+        avg_u2 += u_array[i]*u_array[i];
+    }
+
+    avg_u /= size;
+    avg_u2 /= size;
+
+    double Cv = (beta*beta)*(avg_u2-pow(avg_u,2));
+    Cv += cv_kinetic + 0.5*dim*n*M;
+
+    return Cv;
+}

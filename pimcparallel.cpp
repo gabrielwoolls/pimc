@@ -11,7 +11,7 @@
 #include <chrono>
 #include <utility> // for std::pair used in `thermo_sample`
 #include <omp.h>
-#include <utility> // for std::pair used in `thermo_sample`
+#include <tuple> // for std::pair used in `thermo_sample`
 #include <mpi.h>
 
 #define OMP_NUM_THREADS 12
@@ -50,6 +50,7 @@ double U(double***, double**, int, int, int);
 void beadbybead_T(double**, int, int);
 void beadbybead_A(double***, double**, int, int);
 double U_all_particles(double ***, int);
+std::tuple<double, double> thermo_sample(double***);
 
 
 int main(int argc, char* argv []) {
@@ -147,7 +148,8 @@ int main(int argc, char* argv []) {
     }
     
     // the energy & kinetic Cv computed from *this* Markov Chain initial condition
-    double energy_mc, cv_kin_mc = thermo_sample(Q);
+    double energy_mc, cv_kin_mc;
+    tie(energy_mc, cv_kin_mc) = thermo_sample(Q);
 
     std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
 
@@ -288,7 +290,7 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
     }
 }
 
-double thermo_sample(double*** Q_ijk){
+std::tuple<double, double> thermo_sample(double*** Q_ijk){
 // Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
 // and computes its contribution to the thermal energy U
 
@@ -320,7 +322,7 @@ for (int i=0; i<n; i++){
 
 u = 0.5*dim*n*M/b -potential/M - kinetic*M/(4*lambd*pow(b,2));
 cv = -kinetic * M/(2*lambd*b);
-return {u, cv};
+return std::make_tuple(u, cv);
 }
 
 // compute the heat capacity Cv from the 'kinetic' contribution + energy variance
