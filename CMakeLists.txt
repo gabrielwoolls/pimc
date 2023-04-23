@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.14)
-project(hw2-1)
+project(pimc)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED YES)
 
 find_package(OpenMP REQUIRED)
+find_package(MPI REQUIRED)
 
 # We require the GNU compiler for this assignment.
 if (NOT "${CMAKE_C_COMPILER_ID}" STREQUAL "GNU")
@@ -17,7 +18,7 @@ endif ()
 add_executable(serial pimcserial.cpp)
 add_executable(parallel pimcparallel.cpp)
 
-target_link_libraries(parallel PRIVATE OpenMP::OpenMP_CXX)
+target_link_libraries(parallel PRIVATE OpenMP::OpenMP_CXX PRIVATE MPI::MPI_CXX)
 
 # Copy the job scripts
 configure_file(job-serial job-serial COPYONLY)

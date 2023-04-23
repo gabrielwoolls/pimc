@@ -9,10 +9,12 @@
 #include <random>
 #include <iomanip>
 #include <chrono>
+#include <utility> // for std::pair used in `thermo_sample`
 #include <omp.h>
 #include <utility> // for std::pair used in `thermo_sample`
+#include <mpi.h>
 
-#define OMP_NUM_THREADS 2
+#define OMP_NUM_THREADS 12
 
 using namespace std;
 
@@ -24,7 +26,7 @@ std::mt19937 e2( seed ? seed : rd());
 std::uniform_real_distribution<> dist(0., 1.);
 std::default_random_engine generator;
 
-int n = 5; // num of particles
+int n = 500; // num of particles
 int M = 40; // num total timesteps
 int dim = 2; // num spatial dimensions
 
@@ -37,6 +39,9 @@ double L = 10.0; // box size is -L to L in dim dimensions
 
 int n_updates = 20000; // number of attempts at updating worldlines per step
 int acceptances = 0; // tracker of how many updates get accepted
+
+// OMP params
+int barrier_wait = 1; // How many updates to do independently before manual barrier
 
 
 //functions
@@ -52,9 +57,11 @@ int main(int argc, char* argv []) {
     std::cout << std::fixed;
     std::cout << std::setprecision(2);
 
+    // Set up OMP and MPI
+    omp_set_num_threads(OMP_NUM_THREADS);
+
     auto start_time = std::chrono::steady_clock::now();
 
-    omp_set_num_threads(OMP_NUM_THREADS);
     // make array of all particle worldlines:
     // Q_ijk = (particle id i, time step j, dimension k)
     // put this back in eventually but vectors are easier to debug
@@ -91,7 +98,7 @@ int main(int argc, char* argv []) {
         int my_id, num_threads;
         my_id = omp_get_thread_num();
         num_threads = omp_get_num_threads();
-        
+
 
         // Q_test will hold one particle's new trial worldline:
         //std::vector<std::vector<double>> Q_test(M,std::vector<double>(dim));
@@ -132,7 +139,10 @@ int main(int argc, char* argv []) {
                 beadbybead_A(Q, Q_test, loc_particle, t_upd); 
             }
 
-                #pragma omp barrier
+                if (updates % barrier_wait == 0) {
+                    #pragma omp barrier
+                    }
+
             }
     }
 
@@ -165,6 +175,7 @@ int main(int argc, char* argv []) {
     // close output file
     outFile.close();
 
+
     return 0;
 }
 
@@ -194,6 +205,17 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
     return 4*(r6*r6 - r6);
 }
 
+// interparticle potential U for all particle pairs at time t
+double U_all_particles(double*** Q_ijk, int t){
+    double potential=0;
+    for (int a=0; a<n; a++){
+        for (int b=a+1; b<n; b++){
+            // add potential between particles (a,b)
+            potential += U(Q_ijk, Q_ijk[a], b, -1, t);
+        }
+    }
+    return potential;
+}
 
 // interparticle potential U for all particle pairs at time t
 double U_all_particles(double*** Q_ijk, int t){
@@ -219,7 +241,7 @@ void beadbybead_T(double** Q_test, int i, int t) {
         r_mean[k] = 0.5*(Q_test[(M+t-1)%M][k]+Q_test[(t+1)%M][k]);
 
         // use a gaussian to update positions; it must have stdev lambda*dt and mean r_mean[k]
-        std::normal_distribution<double> distrib(r_mean[k],dt*lambd);
+        std::normal_distribution<double> distrib(r_mean[k],std::sqrt(dt*lambd));
         Q_test[t][k] = distrib(generator);
     }
 }
@@ -244,13 +266,10 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
 
     //if(i==0){std::cout << V_tot << std::endl;}
     // instead of doing prob = min{1,e^(tau v' - v)}, just check if V_tot is positive
-    // TODO: can speed this up a lot if we only update the correct dt rather than all M of them
     if (V_tot < 0) {
-        for (int t = 0; t < M; t++) {
-            for (int k = 0; k < dim; k++) {
+        for (int k = 0; k < dim; k++) {
             Q[i][t][k] = Q_test[t][k];
             }
-        }
         acceptances += 1;
     }
     else {
@@ -258,16 +277,14 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
 
         // accept move only if a random number is lower than acceptance prob
         if (dist(e2) < prob) {
-            for (int t = 0; t < M; t++) {
-                for (int k = 0; k < dim; k++) {
+            for (int k = 0; k < dim; k++) {
                     Q[i][t][k] = Q_test[t][k];
                 }
-            }
+
             acceptances += 1;
         }
     }
 }
-
 
 double thermo_sample(double*** Q_ijk){
 // Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
@@ -325,24 +342,5 @@ double get_heat_cap(double* u_array, double cv_kinetic, double beta){
     return Cv;
 }
 
-// double heat_cap_kinetic_sample(double*** Q_ijk){
-// Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
-// and computes the kinetic contribution to the heat capacity Cv
-
-// double cv = 0;
-// for (int i=0; i<n; i++){
-//     for (int k=0; k<dim; k++){
-//         for (int j=0; j<M-1; j++){
-//             // kinetic term (R_{mu+1}-R_mu)^2
-//             cv += pow((Q_ijk[i][j+1][k]-Q_ijk[i][j][k]),2);            
-//         }
-//         // plus the periodic-boundary kinetic term connecting times 0 and M
-//         cv += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
-//     }
-// }
-
-// cv *= -M/(2*lambd*b);
-// return cv;
-// }
 
 

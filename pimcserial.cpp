@@ -193,7 +193,7 @@ void beadbybead_T( double** Q_test, int i, int t) {
         r_mean[k] = 0.5*(Q_test[(M+t-1)%M][k]+Q_test[(t+1)%M][k]);
 
         // use a gaussian to update positions; it must have stdev lambda*dt and mean r_mean[k]
-        std::normal_distribution<double> distrib(r_mean[k],dt*lambd);
+        std::normal_distribution<double> distrib(r_mean[k],std::sqrt(dt*lambd));
         Q_test[t][k] = distrib(generator);
     }
 }
