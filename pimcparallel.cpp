@@ -9,7 +9,7 @@
 #include <random>
 #include <iomanip>
 #include <chrono>
-
+#include <utility> // for std::pair used in `thermo_sample`
 #include <omp.h>
 #include <mpi.h>
 
