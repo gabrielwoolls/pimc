@@ -221,20 +221,6 @@ double U_all_particles(double*** Q_ijk, int t){
     return potential;
 }
 
-// interparticle potential U for all particle pairs at time t
-double U_all_particles(double*** Q_ijk, int t){
-    double potential=0;
-    for (int a=0; a<n; a++){
-        for (int b=a+1; b<n; b++){
-            // add potential between particles (a,b)
-            potential += U(Q_ijk, Q_ijk[a], b, -1, t);
-        }
-    }
-    return potential;
-}
-
-
-
 
 // move a particle i at bead (time step) t according to gaussian dist, then write new pos.to Q_test
 void beadbybead_T(double** Q_test, int i, int t) {
