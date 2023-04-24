@@ -50,6 +50,7 @@ double U(double***, double**, int, int, int);
 void beadbybead_T(double**, int, int);
 void beadbybead_A(double***, double**, int, int);
 double U_all_particles(double ***, int);
+int do_one_simulation();
 std::tuple<double, double> thermo_sample(double***);
 
 
