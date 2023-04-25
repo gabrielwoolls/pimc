@@ -43,6 +43,8 @@ int acceptances = 0; // tracker of how many updates get accepted
 // OMP params
 int barrier_wait = 1; // How many updates to do independently before manual barrier
 
+int sims_per_rank = 5; // how many Markov Chains each MPI rank should simulate
+
 
 //functions
 double V_ext(double**, int);
@@ -50,28 +52,68 @@ double U(double***, double**, int, int, int);
 void beadbybead_T(double**, int, int);
 void beadbybead_A(double***, double**, int, int);
 double U_all_particles(double ***, int);
-int do_one_simulation();
 std::tuple<double, double> thermo_sample(double***);
+void do_one_mc_sim(double*, double*, int*, int*, int);
 
 
 int main(int argc, char* argv []) {
-    do_one_simulation();
+
+    // Init MPI
+    int num_procs, rank;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    double* recv_buf_energy = NULL;
+    double* recv_buf_cv = NULL;
+
+    int *displs = new int[num_procs];
+    int* counts = new int[num_procs];
+    for (int r=0; r<num_procs; r++){
+        counts[r] = 1; // only one energy (or Cv) will be sent at a time
+    }
+
+    if (rank==0) {
+        recv_buf_energy = new double[num_procs * sims_per_rank];
+        recv_buf_cv = new double[num_procs * sims_per_rank];
+    }
+    
+
+    for (int s=0; s<sims_per_rank; s++){
+        
+        sim_num = s + rank * sims_per_rank; // the 'id' of this simulation
+
+        for (int r=0; r<num_procs; r++){
+            displs[r] = s + r * sims_per_rank; // only one energy (or Cv) will be sent at a time
+        }
+
+        do_one_mc_sim(recv_buf_energy, recv_buf_cv, displs, counts, num_procs);
+    }
+    
+    
+    MPI_Finalize();    
+    return 0;
 }
 
 
-int do_one_simulation() {
+void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, int* counts, int num_procs) {
+    // do one simulation (at specified parameters beta, N, M, etc) with a 
+    // single Markov initial condition, and return one energy + kinetic Cv
+
     std::srand(time(NULL));
     std::cout << std::fixed;
     std::cout << std::setprecision(2);
 
-    // Set up OMP and MPI
+    // Set up OMP (and MPI?)
     omp_set_num_threads(OMP_NUM_THREADS);
+
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     auto start_time = std::chrono::steady_clock::now();
 
     // make array of all particle worldlines:
     // Q_ijk = (particle id i, time step j, dimension k)
-    // put this back in eventually but vectors are easier to debug
     double*** Q = new double**[n];
 
     #pragma omp parallel for
@@ -82,8 +124,6 @@ int do_one_simulation() {
             }
         }
 
-    // // temporary vec of vec of vecs, easier to debug than pointers
-    // std::vector<std::vector<std::vector<double>>> Q(n,std::vector<std::vector<double>>(M,std::vector<double>(dim)));
 
     // initialize particle positions somewhere in the box
     double rand_q;
@@ -97,8 +137,7 @@ int do_one_simulation() {
             }
         }
 
-    // try to update particle worldlines
-
+    // Metropolis-Hastings: try to update particle worldlines
 
     #pragma omp parallel
     {
@@ -108,7 +147,6 @@ int do_one_simulation() {
 
 
         // Q_test will hold one particle's new trial worldline:
-        //std::vector<std::vector<double>> Q_test(M,std::vector<double>(dim));
         // Each OpenMP thread needs its own `Q_test`, hence why it's after the `#pragma`
         double** Q_test = new double*[M];
         for(int i = 0; i < M; ++i){
@@ -129,8 +167,6 @@ int do_one_simulation() {
 
             // Each thread goes through the particles it owns
             for( int loc_particle = my_start; loc_particle < my_end; loc_particle++) {
-
-                //std::cout << "Thread " << my_id << " working on particle " << loc_particle << std::endl;
 
                 // fill in Q_test for all time slices
                 for(int t = 0; t < M; t++) {
@@ -157,7 +193,15 @@ int do_one_simulation() {
     double energy_mc, cv_kin_mc;
     tie(energy_mc, cv_kin_mc) = thermo_sample(Q);
 
-    std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
+    // ** send energy + kinetic Cv to MPI rank 0
+    MPI_Gatherv(&energy_mc, 1, MPI_DOUBLE, recv_buf_energy, counts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Gatherv(&cv_kin_mc, 1, MPI_DOUBLE, recv_buf_cv, counts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    // ** ----
+
+    // ----
+    // TODO?: send acceptances & total moves to MPI rank 0
+    // std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
+    // ----
 
     auto end_time = std::chrono::steady_clock::now();
 
@@ -167,9 +211,9 @@ int do_one_simulation() {
     // Finalize
     std::cout << "Simulation Time = " << seconds << " seconds for " << n << " particles.\n";
 
-
     // write an output file
-    ofstream outFile("worldlines_parallel.txt");
+    std::string filename = "worldlines_parallel" + std::to_string(rank) + ".txt";
+    ofstream outFile(filename); // ofstream outFile("worldlines_parallel.txt");
 
     // print array to file
     for (int i = 0; i < n; i++) {
@@ -184,9 +228,6 @@ int do_one_simulation() {
 
     // close output file
     outFile.close();
-
-
-    return 0;
 }
 
 
