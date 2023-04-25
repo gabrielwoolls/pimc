@@ -26,7 +26,7 @@ std::mt19937 e2( seed ? seed : rd());
 std::uniform_real_distribution<> dist(0., 1.);
 std::default_random_engine generator;
 
-int n = 500; // num of particles
+int n = 10; // num of particles
 int M = 40; // num total timesteps
 int dim = 2; // num spatial dimensions
 
@@ -43,7 +43,7 @@ int acceptances = 0; // tracker of how many updates get accepted
 // OMP params
 int barrier_wait = 1; // How many updates to do independently before manual barrier
 
-int sims_per_rank = 5; // how many Markov Chains each MPI rank should simulate
+int sims_per_rank = 3; // how many MCMC simulations each MPI rank should do
 
 
 //functions
@@ -53,13 +53,14 @@ void beadbybead_T(double**, int, int);
 void beadbybead_A(double***, double**, int, int);
 double U_all_particles(double ***, int);
 std::tuple<double, double> thermo_sample(double***);
-void do_one_mc_sim(double*, double*, int*, int*, int);
+void do_one_mc_sim(double*, double*, int*, int*, int, int);
+double get_heat_cap(double*, double*);
 
 
 int main(int argc, char* argv []) {
 
     // Init MPI
-    int num_procs, rank;
+    int num_procs, rank, sim_num;
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -81,22 +82,51 @@ int main(int argc, char* argv []) {
 
     for (int s=0; s<sims_per_rank; s++){
         
-        sim_num = s + rank * sims_per_rank; // the 'id' of this simulation
+        // sim_num = s + rank * sims_per_rank; // the 'id' of this simulation
 
         for (int r=0; r<num_procs; r++){
             displs[r] = s + r * sims_per_rank; // only one energy (or Cv) will be sent at a time
         }
 
-        do_one_mc_sim(recv_buf_energy, recv_buf_cv, displs, counts, num_procs);
+        do_one_mc_sim(recv_buf_energy, recv_buf_cv, displs, counts, num_procs, s);
     }
     
+
+    // do final energy + Cv analysis
+    if (rank==0){
+        std::cout << "energies: " << std::endl;
+        for (int i=0; i<num_procs * sims_per_rank; i++){
+            std::cout << recv_buf_energy[i] << endl;
+        }
+
+        // calculate full heat capacity (could just do this in python tbh)
+        double cv_full = get_heat_cap(recv_buf_energy, recv_buf_cv);
+
+        // write to output file
+        ofstream outFile("observables.txt"); 
+
+        // add (energy, cv_kin) data to file, for each simulation
+        for (int i = 0; i < num_procs * sims_per_rank; i++) {
+            outFile << recv_buf_energy[i] << " " << recv_buf_cv[i];
+            outFile << endl;
+        }
+
+        // add the calculated total heat capacity in final line
+        outFile << endl;
+        outFile << cv_full;
+        outFile.close();
+
+        // while we're at it, print out in terminal
+        std::cout << "Total heat capacity: " << cv_full;
+    }
+
     
     MPI_Finalize();    
     return 0;
 }
 
 
-void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, int* counts, int num_procs) {
+void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, int* counts, int num_procs, int which_sim) {
     // do one simulation (at specified parameters beta, N, M, etc) with a 
     // single Markov initial condition, and return one energy + kinetic Cv
 
@@ -137,7 +167,7 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
             }
         }
 
-    // Metropolis-Hastings: try to update particle worldlines
+    // Metropolis-Hastings algo: try to update particle worldlines
 
     #pragma omp parallel
     {
@@ -189,9 +219,11 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
             }
     }
     
-    // the energy & kinetic Cv computed from *this* Markov Chain initial condition
+    // the energy & kinetic Cv computed from this MC initial condition
     double energy_mc, cv_kin_mc;
     tie(energy_mc, cv_kin_mc) = thermo_sample(Q);
+
+    std::cout << "rank " << rank << ", sim " << which_sim << ", energy " << energy_mc << std::endl;
 
     // ** send energy + kinetic Cv to MPI rank 0
     MPI_Gatherv(&energy_mc, 1, MPI_DOUBLE, recv_buf_energy, counts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -199,7 +231,7 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
     // ** ----
 
     // ----
-    // TODO?: send acceptances & total moves to MPI rank 0
+    // TODO?: send acceptances & total moves to MPI rank 0?
     // std::cout << acceptances << " out of " << n*n_updates << " moves accepted." << std::endl;
     // ----
 
@@ -209,14 +241,17 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
     double seconds = diff.count();
 
     // Finalize
-    std::cout << "Simulation Time = " << seconds << " seconds for " << n << " particles.\n";
+    // std::cout << "Simulation Time = " << seconds << " seconds for " << n << " particles.\n";
 
     // write an output file
     std::string filename = "worldlines_parallel" + std::to_string(rank) + ".txt";
-    ofstream outFile(filename); // ofstream outFile("worldlines_parallel.txt");
+    ofstream outFile(filename, std::ios::app);  // open in append mode -> NEED TO DELETE FILES BEFORE RUNNING
 
     // print array to file
     for (int i = 0; i < n; i++) {
+
+        outFile << "particle " << i << ", simulation " << which_sim << endl;
+        
         for (int j = 0; j < M; j++) {
             for (int k = 0; k < dim; k++) {
                 outFile << Q[i][j][k] << " ";
@@ -327,54 +362,57 @@ std::tuple<double, double> thermo_sample(double*** Q_ijk){
 // Takes a set of worldlines `Q_ijk` (i->particle, j->time step, k->spatial dim)
 // and computes its contribution to the thermal energy U
 
-double kinetic = 0;
-double potential = 0;
+    double kinetic = 0;
+    double potential = 0;
 
-double u, cv = 0;
+    double u, cv = 0;
 
-for (int i=0; i<n; i++){
-    for (int k=0; k<dim; k++){
-        for (int j=0; j<M-1; j++){
-            // kinetic term (R_{mu+1}-R_mu)^2
-            kinetic += pow((Q_ijk[i][j+1][k]-Q_ijk[i][j][k]),2);
-            
-            // external harmonic potential
-            potential += V_ext(Q_ijk[i], j);
+    for (int i=0; i<n; i++){
+        for (int k=0; k<dim; k++){
+            for (int j=0; j<M-1; j++){
+                // kinetic term (R_{mu+1}-R_mu)^2
+                kinetic += pow((Q_ijk[i][j+1][k]-Q_ijk[i][j][k]),2);
+                
+                // external harmonic potential
+                potential += V_ext(Q_ijk[i], j);
 
-            // interparticle LJ potential
-            potential += U_all_particles(Q_ijk, j);
+                // interparticle LJ potential
+                potential += U_all_particles(Q_ijk, j);
+            }
+            // plus the periodic-boundary kinetic term connecting times 0 and M
+            kinetic += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
         }
-        // plus the periodic-boundary kinetic term connecting times 0 and M
-        kinetic += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
     }
-}
 
-// kinetic *= M/(4*lambd*pow(b,2));
-// potential /= M;
-// return -(kinetic + potential);
+    // kinetic *= M/(4*lambd*pow(b,2));
+    // potential /= M;
+    // return -(kinetic + potential);
 
-u = 0.5*dim*n*M/b -potential/M - kinetic*M/(4*lambd*pow(b,2));
-cv = -kinetic * M/(2*lambd*b);
-return std::make_tuple(u, cv);
-}
+    u = 0.5*dim*n*M/b -potential/M - kinetic*M/(4*lambd*pow(b,2));
+    cv = -kinetic * M/(2*lambd*b);
+    return std::make_tuple(u, cv);
+    }
 
 // compute the heat capacity Cv from the 'kinetic' contribution + energy variance
-// u_array should be a list of thermal energies computed from different initial conditions at the same beta
-double get_heat_cap(double* u_array, double cv_kinetic, double beta){
+// u_array, cv_kin_array should be lists of energies & kinetic heat capacities, 
+// computed from different initial conditions (at the same beta)
+double get_heat_cap(double* u_array, double* cv_kin_array){
 
-    int size = sizeof(u_array) / sizeof(u_array[0]);
+    int size = sizeof(u_array) / sizeof(u_array[0]); // assume cv_kin_array is of same size
 
-    double avg_u, avg_u2 = 0;
+    double avg_u, avg_u2, cv_kinetic = 0;
     for (int i=0; i<size; i++){
         avg_u += u_array[i];
         avg_u2 += u_array[i]*u_array[i];
+        cv_kinetic += cv_kin_array[i];
     }
 
     avg_u /= size;
     avg_u2 /= size;
+    cv_kinetic /= size;
 
-    double Cv = (beta*beta)*(avg_u2-pow(avg_u,2));
-    Cv += cv_kinetic + 0.5*dim*n*M;
+    double Cv = b * b * (avg_u2-pow(avg_u,2));
+    Cv += cv_kinetic + 0.5*dim*n*M; // include the equipartition contribution as well
 
     return Cv;
 }
