@@ -59,11 +59,14 @@ double get_heat_cap(double*, double*);
 
 int main(int argc, char* argv []) {
 
+
     // Init MPI
     int num_procs, rank, sim_num;
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    std::cout << "BEGIN num procs: " << num_procs << std::endl;
 
     double* recv_buf_energy = NULL;
     double* recv_buf_cv = NULL;
@@ -286,18 +289,35 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
     double r2 = 0.;
     for (int k = 0; k < dim; k++) {
         r2 += pow(Q[i][t][k]-Q_test[t][k],2);
+
+        // if (r2==0.0) {
+        //     cout << "r2 blew up for Qtest(a)=" << Q_test[t][k] << ", Qitk(b)=" << Q[i][t][k];
+        // }
     }
     double r6 = pow(avg_sep / r2, 3);
-    return 4*(r6*r6 - r6);
+    double u = 4*(r6*r6 - r6);
+    
+
+
+    return u;
 }
 
 // interparticle potential U for all particle pairs at time t
 double U_all_particles(double*** Q_ijk, int t){
     double potential=0;
+    double dV;
     for (int a=0; a<n; a++){
         for (int b=a+1; b<n; b++){
             // add potential between particles (a,b)
-            potential += U(Q_ijk, Q_ijk[a], b, -1, t);
+            dV = U(Q_ijk, Q_ijk[a], b, 0, t);
+
+            if (isnan(dV)){
+                cout << "Q_ijk(a): " << Q_ijk[a][t][0] << "," << Q_ijk[a][t][1] << endl;
+                cout << "Q_ijk(b): " << Q_ijk[b][t][0] << "," << Q_ijk[b][t][1] << endl;
+                cout << "|| for ptcls a=" << a << ", b=" << b << ", t=" << t << endl << endl;;
+            }
+
+            potential += dV;
         }
     }
     return potential;
@@ -333,6 +353,18 @@ void beadbybead_A(double*** Q, double** Q_test, int i, int t) {
     for (int l = 0; l < n; l++) {
         if (l != i) {
             V_tot += U(Q, Q_test, l, i, t) - U(Q, Q[i], l, i, t);
+
+            if (isnan(U(Q, Q_test, l, i, t))){
+                cout<<"U(q,qtest) blew up, ptcls" << i << ", " << l << endl;
+            }
+
+            if (isnan(U(Q, Q[i], l, i, t))){
+                cout<<"U(q,qi) blew up, ptcls" << i << ", " << l << endl;
+            }
+
+            if (isnan(V_tot)){
+                cout<<"V_tot blew up, ptcls" << i << ", " << l << endl;
+            }                        
         }
     }
 
@@ -376,8 +408,16 @@ std::tuple<double, double> thermo_sample(double*** Q_ijk){
                 // external harmonic potential
                 potential += V_ext(Q_ijk[i], j);
 
+                // if (isnan(potential)){
+                //     cout << "harmonic potential blew up" << endl;
+                // }
+
                 // interparticle LJ potential
                 potential += U_all_particles(Q_ijk, j);
+
+                // if (isnan(potential)){
+                //     cout << "U_LJ blew up" << endl;
+                // }
             }
             // plus the periodic-boundary kinetic term connecting times 0 and M
             kinetic += pow((Q_ijk[i,M-1,k]-Q_ijk[i,0,k]),2);
@@ -390,6 +430,11 @@ std::tuple<double, double> thermo_sample(double*** Q_ijk){
 
     u = 0.5*dim*n*M/b -potential/M - kinetic*M/(4*lambd*pow(b,2));
     cv = -kinetic * M/(2*lambd*b);
+
+    // if (std::isnan(u)){
+    //     std::cout<< "nan energy: potential = " << potential << ", kinetic = " << kinetic << std::endl; 
+    // }
+
     return std::make_tuple(u, cv);
     }
 
