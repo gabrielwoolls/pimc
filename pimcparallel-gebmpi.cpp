@@ -20,9 +20,11 @@ using namespace std;
 
 
 // these are used to generate random numbers later.
-int seed = 8;
-std::random_device rd;
-std::mt19937 e2( seed ? seed : rd());
+// int seed = 0;
+// std::random_device rd;
+// std::mt19937 e2( seed ? seed : rd());
+auto seed = std::chrono::system_clock::now().time_since_epoch().count();
+std::mt19937 e2(seed);
 std::uniform_real_distribution<> dist(0., 1.);
 std::default_random_engine generator;
 
@@ -163,6 +165,8 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
     #pragma omp parallel for
         for(int i = 0; i < n; ++i) {
             for(int k = 0; k < dim; ++k) {
+                seed = std::chrono::system_clock::now().time_since_epoch().count();
+                std::mt19937 e2(seed);
                 rand_q = L*(2.*dist(e2) - 1.); //pseudorand. number btwn -L and L
                 for(int j = 0; j < M; ++j) {
                     Q[i][j][k] = rand_q;
@@ -290,9 +294,9 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
     for (int k = 0; k < dim; k++) {
         r2 += pow(Q[i][t][k]-Q_test[t][k],2);
 
-        // if (r2==0.0) {
-        //     cout << "r2 blew up for Qtest(a)=" << Q_test[t][k] << ", Qitk(b)=" << Q[i][t][k];
-        // }
+        if (r2==0.0) {
+            cout << "r2 blew up for Qtest(a)=" << Q_test[t][k] << ", Qitk(b)=" << Q[i][t][k];
+        }
     }
     double r6 = pow(avg_sep / r2, 3);
     double u = 4*(r6*r6 - r6);
