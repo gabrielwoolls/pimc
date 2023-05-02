@@ -28,7 +28,7 @@ std::mt19937 e2(seed);
 std::uniform_real_distribution<> dist(0., 1.);
 std::default_random_engine generator;
 
-int n = 10; // num of particles
+int n = 100; // num of particles
 int M = 40; // num total timesteps
 int dim = 2; // num spatial dimensions
 
@@ -50,6 +50,10 @@ int barrier_wait = 1; // How many updates to do independently before manual barr
 int sims_per_rank = 3; // how many MCMC simulations each MPI rank should do
 
 double min_radius = 1;
+
+bool PRINT_THINGS = false;
+bool SAVE_ENERGIES = false;
+
 
 //functions
 double V_ext(double**, int);
@@ -231,7 +235,7 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
                     #pragma omp barrier
                     }
 
-                if (updates % 10 == 0) {
+                if (SAVE_ENERGIES == true && updates % 10 == 0) {
                     double en, __;
                     tie(en, __) = thermo_sample(Q);
                     energy_storage[which_sim][updates/10] = en;
@@ -244,7 +248,9 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
     double energy_mc, cv_kin_mc;
     tie(energy_mc, cv_kin_mc) = thermo_sample(Q);
 
+    if (PRINT_THINGS == true){
     std::cout << "rank " << rank << ", sim " << which_sim << ", energy " << energy_mc << std::endl;
+    }
 
     // ** send energy + kinetic Cv to MPI rank 0
     MPI_Gatherv(&energy_mc, 1, MPI_DOUBLE, recv_buf_energy, counts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -287,12 +293,15 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
 
 
     // **** Store energies in files, to check convergence ****
+    if (SAVE_ENERGIES == true){
     filename = "mc_energies_rank_" + std::to_string(rank) + "sim_" + std::to_string(which_sim) + ".txt";
     outFile = ofstream(filename);
     for (int s; s < n_updates/10; s++){
         outFile << energy_storage[which_sim][s] << endl;
     }
     outFile.close();
+    }
+    
 
 }
 
@@ -321,7 +330,7 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
     double r6 = pow(avg_sep / r2, 3);
     double u = 4*(r6*r6 - r6);
     
-    if (abs(r2)<=1e-8) {
+    if (PRINT_THINGS == true && abs(r2)<=1e-8) {
         // cout << "r2 blew up for Qtest(a)=" << Q_test[t][k] << ", Qitk(b)=" << Q[i][t][k];
         cout << "r2=" << r2 << ", u=" << u << endl;
     }
@@ -470,10 +479,10 @@ std::tuple<double, double> thermo_sample(double*** Q_ijk){
     return std::make_tuple(u, cv);
     }
 
-// compute the heat capacity Cv from the 'kinetic' contribution + energy variance
-// u_array, cv_kin_array should be lists of energies & kinetic heat capacities, 
-// computed from different initial conditions (at the same beta)
+// compute heat capacity Cv from the 'kinetic' contribution + energy variance
 double get_heat_cap(double* u_array, double* cv_kin_array){
+    // u_array, cv_kin_array should be lists of energies & kinetic heat capacities, 
+    // computed from different initial conditions (at the same beta)
 
     int size = sizeof(u_array) / sizeof(u_array[0]); // assume cv_kin_array is of same size
 
