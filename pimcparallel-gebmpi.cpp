@@ -42,11 +42,14 @@ double L = 10.0; // box size is -L to L in dim dimensions
 int n_updates = 20000; // number of attempts at updating worldlines per step
 int acceptances = 0; // tracker of how many updates get accepted
 
+double** energy_storage;
+
 // OMP params
 int barrier_wait = 1; // How many updates to do independently before manual barrier
 
 int sims_per_rank = 3; // how many MCMC simulations each MPI rank should do
 
+double min_radius = 1;
 
 //functions
 double V_ext(double**, int);
@@ -82,6 +85,11 @@ int main(int argc, char* argv []) {
     if (rank==0) {
         recv_buf_energy = new double[num_procs * sims_per_rank];
         recv_buf_cv = new double[num_procs * sims_per_rank];
+    }
+    
+    energy_storage = new double*[sims_per_rank];
+    for (int sim=0; sim<sims_per_rank; sim++){
+        energy_storage[sim] = new double[n_updates/10];
     }
     
 
@@ -122,7 +130,7 @@ int main(int argc, char* argv []) {
         outFile.close();
 
         // while we're at it, print out in terminal
-        std::cout << "Total heat capacity: " << cv_full;
+        std::cout << "Total heat capacity: " << cv_full << ", min radius " << min_radius;
     }
 
     
@@ -223,6 +231,12 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
                     #pragma omp barrier
                     }
 
+                if (updates % 10 == 0) {
+                    double en, __;
+                    tie(en, __) = thermo_sample(Q);
+                    energy_storage[which_sim][updates/10] = en;
+                }
+
             }
     }
     
@@ -270,6 +284,16 @@ void do_one_mc_sim(double* recv_buf_energy, double* recv_buf_cv, int* displs, in
 
     // close output file
     outFile.close();
+
+
+    // **** Store energies in files, to check convergence ****
+    filename = "mc_energies_rank_" + std::to_string(rank) + "sim_" + std::to_string(which_sim) + ".txt";
+    outFile = ofstream(filename);
+    for (int s; s < n_updates/10; s++){
+        outFile << energy_storage[which_sim][s] << endl;
+    }
+    outFile.close();
+
 }
 
 
@@ -293,14 +317,18 @@ double U(double*** Q, double** Q_test, int i, int j, int t) {
     double r2 = 0.;
     for (int k = 0; k < dim; k++) {
         r2 += pow(Q[i][t][k]-Q_test[t][k],2);
-
-        if (r2==0.0) {
-            cout << "r2 blew up for Qtest(a)=" << Q_test[t][k] << ", Qitk(b)=" << Q[i][t][k];
-        }
     }
     double r6 = pow(avg_sep / r2, 3);
     double u = 4*(r6*r6 - r6);
     
+    if (abs(r2)<=1e-8) {
+        // cout << "r2 blew up for Qtest(a)=" << Q_test[t][k] << ", Qitk(b)=" << Q[i][t][k];
+        cout << "r2=" << r2 << ", u=" << u << endl;
+    }
+
+    if (abs(r2) < min_radius){
+        min_radius = r2;
+    }
 
 
     return u;
