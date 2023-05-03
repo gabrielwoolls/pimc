@@ -1,0 +1,49 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+with open('worldlines_parallel0.txt', 'r') as f:
+    data = f.read().split('particle ')[1:]  # split data by particle delimiter and ignore the first empty element
+
+fig, axs = plt.subplots(1, figsize=(5, 5))
+
+simulation_blocks = {}  # store simulation blocks separately
+
+for block in data:
+    block_lines = block.strip().split('\n')
+    particle_simulation_info = block_lines[0].split(', ')
+    particle_num = int(particle_simulation_info[0])
+    simulation_num = int(particle_simulation_info[1].split()[1])
+
+    coordinates = np.array([list(map(float, line.split())) for line in block_lines[1:]])
+
+    fourier_components = np.fft.fft(coordinates, axis=0)
+
+    # Select the lowest 11 Fourier components
+    n = 11
+    low_freq_components = np.zeros_like(fourier_components)
+    low_freq_components[:n] = fourier_components[:n]
+
+    # Reconstruct the walk from the lowest 11 Fourier components
+    reconstructed_coords = np.fft.ifft(low_freq_components, axis=0).real
+
+    x = reconstructed_coords[:,0]
+    y = reconstructed_coords[:,1]
+
+    if simulation_num not in simulation_blocks:
+        simulation_blocks[simulation_num] = []
+
+    simulation_blocks[simulation_num].append((x, y))
+
+# Plot only simulation 0, with different colors for each particle
+simulation = simulation_blocks[0]
+for i, (x, y) in enumerate(simulation):
+    color = plt.cm.rainbow(i / len(simulation))  # sequential rainbow color based on particle number
+    axs.plot(x, y, color=color)
+    axs.scatter(x[0],y[0], marker='o', color='k') # plot where each one starts
+
+plim = 8
+axs.set_xlabel("x")
+axs.set_ylabel("y")
+axs.set_ylim(-plim,plim)
+axs.set_xlim(-plim,plim)
+axs.set_title(f"$n = {i+1}$")
